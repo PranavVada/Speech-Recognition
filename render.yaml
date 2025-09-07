@@ -18,4 +18,4 @@ services:
           property: connectionString
       - key: BASIC_AUTH_USERS
         # Set your own users:passwords here (comma- or semicolon-separated)
-        value: alice:StrongPass1,bob:AnotherPass2
+        value: Pranav:1275,Karthik:roommate
