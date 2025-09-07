@@ -1,10 +1,11 @@
+# render.yaml
 databases:
-  - name: audio-db
+  - name: audio-uploader-db
     plan: free
 
 services:
   - type: web
-    name: gradio-audio
+    name: audio-uploader
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -13,5 +14,8 @@ services:
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: audio-db
+          name: audio-uploader-db
           property: connectionString
+      - key: BASIC_AUTH_USERS
+        # Set your own users:passwords here (comma- or semicolon-separated)
+        value: alice:StrongPass1,bob:AnotherPass2
