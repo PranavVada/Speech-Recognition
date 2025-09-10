@@ -1,11 +1,11 @@
-import os, io
+import os, io, hashlib
 import gradio as gr
 import numpy as np
 import soundfile as sf
 from datetime import datetime
 from base64 import b64decode
 
-from sqlalchemy import create_engine, Column, Integer, String, LargeBinary, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, LargeBinary, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -21,11 +21,14 @@ class AudioText(Base):
     id = Column(Integer, primary_key=True)
     title = Column(String, nullable=False)
     audio_data = Column(LargeBinary, nullable=False)
+    audio_hash = Column(String(64), nullable=False, unique=True)
     transcript = Column(String, nullable=True)
     description = Column(String, nullable=True)
     sample_rate = Column(Integer, nullable=True)
     date = Column(String, default=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'), nullable=True)
     meta = relationship("SubmissionMeta", back_populates="audio", uselist=False, cascade="all, delete-orphan")
+
+Index("ix_audio_text_audio_hash", AudioText.audio_hash, unique=True)
 
 class SubmissionMeta(Base):
     __tablename__ = "submission_meta"
@@ -67,18 +70,16 @@ def process_audio(audio, title, transcript, description, request: gr.Request):
     if audio is None:
         return "Audio is required."
 
-    wav_bytes = None
-    sr_val = None
-
     sr, audio_np = audio
     if not isinstance(audio_np, np.ndarray) or audio_np.size == 0:
         return "Invalid audio input."
-    if audio_np.nbytes > MAX_BYTES:
-        return "Audio file is too large. Please upload a file smaller than 10MB."
+
     buf = io.BytesIO()
     sf.write(buf, audio_np, int(sr), format="WAV", subtype="PCM_16")
     wav_bytes = buf.getvalue()
-    sr_val = int(sr)
+    if len(wav_bytes) > MAX_BYTES:
+        return "Audio file is too large. Please upload a file smaller than 10MB."
+    audio_hash = hashlib.sha256(wav_bytes).hexdigest()
 
     ip = _client_ip(request)
     ua = request.headers.get("user-agent") if hasattr(request, "headers") else None
@@ -86,12 +87,17 @@ def process_audio(audio, title, transcript, description, request: gr.Request):
 
     session = SessionLocal()
     try:
+        existing = session.query(AudioText).filter_by(audio_hash=audio_hash).first()
+        if existing:
+            return "Duplicate submission detected for this audio."
+
         entry = AudioText(
             title=title.strip(),
             audio_data=wav_bytes,
+            audio_hash=audio_hash,
             transcript=(transcript.strip() or None) if transcript else None,
             description=(description.strip() or None) if description else None,
-            sample_rate=sr_val,
+            sample_rate=int(sr),
             date=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         )
         session.add(entry)
