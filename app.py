@@ -8,7 +8,6 @@ from base64 import b64decode
 from sqlalchemy import create_engine, Column, Integer, String, LargeBinary, ForeignKey
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
-# -------- Database (Render Postgres) --------
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL env var is not set. On Render, connect a Postgres and set DATABASE_URL.")
@@ -21,7 +20,7 @@ class AudioText(Base):
     __tablename__ = "audio_text"
     id = Column(Integer, primary_key=True)
     title = Column(String, nullable=False)
-    audio_data = Column(LargeBinary, nullable=True)
+    audio_data = Column(LargeBinary, nullable=False)
     transcript = Column(String, nullable=True)
     description = Column(String, nullable=True)
     sample_rate = Column(Integer, nullable=True)
@@ -40,8 +39,7 @@ class SubmissionMeta(Base):
 
 Base.metadata.create_all(engine)
 
-# -------- App logic --------
-MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+MAX_BYTES = 10 * 1024 * 1024
 
 def _client_ip(req: gr.Request):
     if not req:
@@ -66,18 +64,21 @@ def _username_from_request(req: gr.Request):
 def process_audio(audio, title, transcript, description, request: gr.Request):
     if not title or not title.strip():
         return "Title is required."
+    if audio is None:
+        return "Audio is required."
 
     wav_bytes = None
     sr_val = None
 
-    if audio is not None:
-        sr, audio_np = audio
-        if isinstance(audio_np, np.ndarray) and audio_np.nbytes > MAX_BYTES:
-            return "Audio file is too large. Please upload a file smaller than 10MB."
-        buf = io.BytesIO()
-        sf.write(buf, audio_np, int(sr), format="WAV", subtype="PCM_16")
-        wav_bytes = buf.getvalue()
-        sr_val = int(sr)
+    sr, audio_np = audio
+    if not isinstance(audio_np, np.ndarray) or audio_np.size == 0:
+        return "Invalid audio input."
+    if audio_np.nbytes > MAX_BYTES:
+        return "Audio file is too large. Please upload a file smaller than 10MB."
+    buf = io.BytesIO()
+    sf.write(buf, audio_np, int(sr), format="WAV", subtype="PCM_16")
+    wav_bytes = buf.getvalue()
+    sr_val = int(sr)
 
     ip = _client_ip(request)
     ua = request.headers.get("user-agent") if hasattr(request, "headers") else None
@@ -94,7 +95,7 @@ def process_audio(audio, title, transcript, description, request: gr.Request):
             date=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         )
         session.add(entry)
-        session.flush()  # get entry.id
+        session.flush()
 
         meta = SubmissionMeta(
             audio_id=entry.id,
@@ -119,7 +120,7 @@ description_tb = gr.Textbox(placeholder="(Optional) Describe the context", lines
 demo = gr.Interface(
     fn=process_audio,
     inputs=[
-        gr.Audio(sources=["microphone", "upload"], type="numpy"),
+        gr.Audio(sources=["microphone", "upload"], type="numpy", label="Audio (mandatory)"),
         title_tb,
         transcript_tb,
         description_tb,
@@ -131,7 +132,6 @@ demo = gr.Interface(
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
 
-    # Website login (gates the whole app)
     auth_pairs = []
     auth_env = os.getenv("BASIC_AUTH_USERS", "").strip()
     if auth_env:
